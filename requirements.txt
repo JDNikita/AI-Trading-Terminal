@@ -1,0 +1,8 @@
+streamlit
+yfinance
+plotly
+pandas
+numpy
+ollama
+openai
+requests
