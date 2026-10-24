@@ -25,7 +25,7 @@ st.markdown("""
 <style>
 /* Smooth Dark Blue Gradient Background */
 .stApp {
-    background: linear-gradient(135deg, #070b19 0%, #0f172a 50%, #090d16 100%) !important;
+    background: linear-gradient(135deg, #050814 0%, #0a0f1d 50%, #04060b 100%) !important;
     background-attachment: fixed !important;
 }
 
@@ -122,26 +122,22 @@ st.sidebar.markdown("---")
 
 # Section 1: Asset & Position Sizing
 with st.sidebar.expander("📁 Asset & Position Sizing", expanded=True):
-    st.markdown("##### Select Preset Asset")
-    preset_choice = st.selectbox(
-        "Preset", 
-        ["Select Preset...", "AAPL", "NVDA", "TSLA", "MSFT", "BTC-USD", "ETH-USD", "PEPE-USD", "DOGE-USD"],
-        label_visibility="collapsed"
-    )
+    asset_input_mode = st.radio("Input Method", ["Preset Asset", "Custom / Contract Address"], label_visibility="collapsed")
     
-    st.markdown("##### Or Enter Custom Ticker / Contract")
-    custom_choice = st.text_input(
-        "Custom", 
-        placeholder="e.g. MSFT or Solana Contract...", 
-        label_visibility="collapsed"
-    )
-
-    if custom_choice.strip():
-        ticker_input = custom_choice.strip().upper()
-    elif preset_choice != "Select Preset...":
+    if asset_input_mode == "Preset Asset":
+        preset_choice = st.selectbox(
+            "Preset", 
+            ["AAPL", "NVDA", "TSLA", "MSFT", "BTC-USD", "ETH-USD", "PEPE-USD", "DOGE-USD"],
+            label_visibility="collapsed"
+        )
         ticker_input = preset_choice
     else:
-        ticker_input = "NVDA"
+        custom_choice = st.text_input(
+            "Custom", 
+            placeholder="e.g. MSFT or Solana Contract...", 
+            label_visibility="collapsed"
+        )
+        ticker_input = custom_choice.strip().upper() if custom_choice.strip() else "NVDA"
 
     portfolio_size = st.number_input("Account Equity ($)", value=25000.0, step=1000.0)
     risk_pct = st.number_input("Max Risk Per Trade (%)", min_value=0.1, max_value=25.0, value=1.0, step=0.1)
@@ -188,7 +184,7 @@ def fetch_market_data(symbol, timeframe):
             pairs = ds_res.get('pairs')
             
             if not pairs:
-                return None, None, {}, True
+                return None, [], {}, True
             
             top_pair = pairs[0]
             chain_id = top_pair.get('chainId', 'solana')
@@ -224,7 +220,7 @@ def fetch_market_data(symbol, timeframe):
                 
                 df = pd.DataFrame(records).drop_duplicates(subset=['Date']).set_index('Date').sort_index()
             else:
-                return None, None, {}, True
+                return None, [], {}, True
 
             df['SMA_50'] = df['Close'].rolling(window=min(50, len(df)-1)).mean()
             df['SMA_200'] = df['Close'].rolling(window=min(200, len(df)-1)).mean()
@@ -253,7 +249,7 @@ def fetch_market_data(symbol, timeframe):
         df = stock.history(period=period, interval=interval)
         
         if df is None or df.empty or len(df) < 2:
-            return None, None, {}, False
+            return None, [], {}, False
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -295,7 +291,7 @@ def fetch_market_data(symbol, timeframe):
 
         return df, news, fund_data, is_crypto
     except Exception:
-        return None, None, {}, False
+        return None, [], {}, False
 
 # =============================================================================
 # UNIFIED LLM ENGINE WRAPPER
@@ -474,20 +470,13 @@ if app_mode == "🔍 Single Asset Terminal":
                         f_cols[i].metric(k, val_str)
 
             st.divider()
-            p_col1, p_col2 = st.columns([3, 1])
-            with p_col1:
-                st.markdown(f"### {ticker_input} — Institutional Price & Predictive Trajectory")
-            with p_col2:
-                price_height = st.slider("Price Height", min_value=400, max_value=1000, value=650, step=50, label_visibility="collapsed")
+            st.markdown(f"### {ticker_input} — Institutional Price & Predictive Trajectory")
 
             chart_df = df.copy()
             chart_df = chart_df[~chart_df.index.duplicated(keep='last')]
             chart_df.sort_index(inplace=True)
             
-            if "Ignore Gaps" in axis_mode:
-                chart_x = chart_df.index.strftime('%Y-%m-%d %H:%M' if "1 Hour" in timeframe_choice else '%Y-%m-%d').tolist()
-            else:
-                chart_x = chart_df.index
+            chart_x = chart_df.index
 
             fig_price = go.Figure()
 
@@ -510,11 +499,7 @@ if app_mode == "🔍 Single Asset Terminal":
             future_step_delta = pd.Timedelta(hours=1) if "1 Hour" in timeframe_choice else pd.Timedelta(days=1)
             future_datetimes = [last_date + (future_step_delta * i) for i in range(1, forecast_horizon + 1)]
             
-            if "Ignore Gaps" in axis_mode:
-                future_x = [dt.strftime('%Y-%m-%d %H:%M' if "1 Hour" in timeframe_choice else '%Y-%m-%d') for dt in future_datetimes]
-                proj_x = [chart_x[-1]] + future_x
-            else:
-                proj_x = [last_date] + future_datetimes
+            proj_x = [last_date] + future_datetimes
 
             steps = len(future_datetimes)
             np.random.seed(int(datetime.now().timestamp()) % 10000)
@@ -535,29 +520,24 @@ if app_mode == "🔍 Single Asset Terminal":
                 hoverinfo="skip", showlegend=False
             ))
 
-            xaxis_settings = dict(title="", rangeslider_visible=False)
-            if "Ignore Gaps" in axis_mode:
-                xaxis_settings["type"] = "category"
-                xaxis_settings["nticks"] = 12
-            else:
-                xaxis_settings["type"] = "date"
-                xaxis_settings["rangebreaks"] = [dict(bounds=["sat", "sun"])]
+            xaxis_settings = dict(
+                title="", 
+                rangeslider_visible=True,
+                type="date",
+                rangebreaks=[dict(bounds=["sat", "sun"])] if not is_crypto else []
+            )
 
             fig_price.update_layout(
                 yaxis_title="Price ($)",
                 template="plotly_dark",
-                height=price_height,
+                height=650,
                 xaxis=xaxis_settings,
                 margin=dict(l=40, r=40, t=20, b=20)
             )
 
             st.plotly_chart(fig_price, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True})
 
-            r_col1, r_col2 = st.columns([3, 1])
-            with r_col1:
-                st.markdown("### Relative Strength Index (RSI 14)")
-            with r_col2:
-                rsi_height = st.slider("RSI Height", min_value=150, max_value=500, value=250, step=25, label_visibility="collapsed")
+            st.markdown("### Relative Strength Index (RSI 14)")
 
             fig_rsi = go.Figure()
             fig_rsi.add_trace(go.Scatter(
@@ -571,7 +551,7 @@ if app_mode == "🔍 Single Asset Terminal":
                 yaxis_title="RSI",
                 yaxis=dict(range=[0, 100]),
                 template="plotly_dark",
-                height=rsi_height,
+                height=250,
                 xaxis=xaxis_settings,
                 margin=dict(l=40, r=40, t=20, b=20)
             )
@@ -585,14 +565,19 @@ if app_mode == "🔍 Single Asset Terminal":
             r3.metric("Reward-to-Risk Ratio", f"{pred['target_multiplier']/pred['stop_multiplier']:.1f} : 1")
             r4.metric("Volatility / ATR", format_price(latest_atr))
 
+        else:
+            st.error(
+                f"⚠️ **Data Fetch Failed for `{ticker_input}`**\n\nYahoo Finance or GeckoTerminal may be temporarily rate-limiting requests, or the symbol/contract address is invalid. Try:\n1. Clicking **🧹 Clear App Cache** in the sidebar.\n2. Switching to a major preset like `AAPL` or `NVDA`.\n3. Waiting 30 seconds and refreshing."
+            )
+
 # =============================================================================
 # MODE 2: MORNING WATCHLIST & EDGE SCANNER
 # =============================================================================
 elif app_mode == "⚡ Morning Watchlist & Edge Scanner":
-    st.title("⚡ Morning Portfolio Edge & Risk Scanner")
+    st.title("Morning Portfolio Edge & Risk Scanner")
     st.markdown("Instant batch-scan of your custom watchlist. Flags unusual volume spikes, breaking headlines, and hidden risk anomalies before retail market open.")
 
-    if st.button("🔄 Run Morning Briefing Batch Scan", type="primary"):
+    if st.button("Run Morning Briefing Batch Scan", type="primary"):
         with st.spinner("Scanning all watchlist assets for institutional volume anomalies and news catalysts..."):
             
             results = []
